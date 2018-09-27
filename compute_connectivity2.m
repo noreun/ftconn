@@ -1,0 +1,117 @@
+function output = compute_connectivity2(input1, input2, pairs, freq, taus, nsim)
+
+    oreal = zeros(length(pairs), 4);
+    omean = zeros(length(pairs), 4);
+    ovar = zeros(length(pairs), 4);
+    osur = zeros(length(pairs), 4, nsim);
+
+%     ntau = length(taus);
+
+    for npair = 1:length(pairs)
+        pair = pairs{npair};
+        np1 = length(pair{1});
+        np2 = length(pair{2});
+
+        data1 = input1([pair{1} pair{2}], :);
+        data2 = input2([pair{1} pair{2}], :);
+
+        fprintf('Computing real conenctivity pair %d of %d... \n',npair,length(pairs));
+        x = tic;
+        v1 = compute(data1, freq, taus, np1);
+        v2 = compute(data2, freq, taus, np1);
+        oreal(npair, :) = v1 - v2;
+        fprintf('done. Took %2.2f seconds\n', toc(x));
+
+        for sim = 1:nsim
+            fprintf('Computing surrogated conenctivity %d of %d, pair %d of %d... ',sim,nsim,npair,length(pairs));
+            x = tic;
+            
+            nsamp1 = size(data1,2);
+            nsamp2 = size(data2,2);
+            perm1 = data1;
+            perm2 = data2;
+            for nchan = 1:size(data1,1)
+%                 perm1(nchan,:) = data1(nchan, randperm(nsamp1));
+%                 perm2(nchan,:) = data2(nchan, randperm(nsamp2));
+                perm1(nchan,:) = phase_scramble(data1(nchan, :));
+                perm2(nchan,:) = phase_scramble(data2(nchan, :));
+            end
+
+            v1 = compute(perm1, freq, taus, np1);
+            v2 = compute(perm2, freq, taus, np1);
+            osur(npair, :, sim) = v1 - v2;   
+            fprintf('done. Took %2.2f seconds\n', toc(x));
+
+        end
+        
+        omean(npair, :) = mean(osur(npair, :, :), 3);
+        ovar(npair, :) = std(osur(npair, :, :), [], 3);
+
+    end
+    
+    output = struct;
+    output.real = oreal;
+    output.mean = omean;
+    output.var = ovar;
+    output.sur = osur;
+end
+
+function values = compute(data, freq, taus, np1)
+    
+    values = zeros(1,4);
+    
+    % correlation
+    corrout = corr(data');
+    values(1) = mean(mean(corrout(1:np1, (np1+1):end)));
+
+    % PLI
+%             ft_connectivity_wpli
+
+    % wSMI
+    cfg = struct;
+    cfg.chan_sel = 1:size(data,1);  % compute for all pairs of channels
+    cfg.sf       = freq;  % sampling frequency
+    cfg.taus     = taus;
+    cfg.kernel   = 3; % kernel = 3 (3 samples per symbol)
+    cfg.over_trials       = 0; 
+
+    cfg.data_sel = 1:size(data,2); % compute using all samples
+    [sym, count, smi, wsmi_tmp] = smi_and_wsmi(data, cfg);
+
+    values(2) = mean(mean(wsmi_tmp{1}(1:np1, (np1+1):end)));
+    values(3) = mean(mean(wsmi_tmp{2}(1:np1, (np1+1):end)));
+    values(4) = mean(mean(wsmi_tmp{3}(1:np1, (np1+1):end)));
+%             wsmi(:,:,ic,is) = mean(wsmi_tmp{1}, 3);
+
+    % granger
+end
+
+function output = phase_scramble(signal)
+
+    signal_size = size(signal);
+
+    % Fast-Fourier transform
+    fourier_signal = fft(signal);
+    alpha_signal = abs(fourier_signal);
+    phi_signal = angle(fourier_signal);
+
+    % generate random phase structure
+    phi_noise = angle(fft(rand(signal_size(1), signal_size(2))));
+
+    % mix original and random phase according to intensity
+%     phi_final = WMP(phi_signal, phi_noise, 0);
+    phi_final = phi_noise;
+    
+    % combine power+phase
+    output=real(ifft(cos(phi_final).*alpha_signal + sqrt(-1).*sin(phi_final).*alpha_signal));
+
+end
+
+function phi_final = WMP (phi_signal, phi_noise, w)
+    S = w * sin(phi_signal) + (1-w) * sin(phi_noise);
+    C = w * cos(phi_signal) + (1-w) * cos(phi_noise);
+
+    phi_final = atan(C./S);
+    phi_final(C<0) = phi_final(C<0) + pi;
+    phi_final(S<0 & C>0) = phi_final(S<0 & C>0) + 2*pi; 
+end

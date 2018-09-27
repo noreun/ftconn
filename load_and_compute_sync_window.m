@@ -1,0 +1,158 @@
+% Compute sychrony between pair of (regions) electrodes from EEGLAB files
+% Leonardo S. Barbosa - Sept 2018
+%
+
+%% Define input variables 
+
+inputfolder = '/data2/lucidcomplexity/dataset1/original';
+inputfile = '_ICApruned_avgref_';
+
+outputfolder = '/data2/lucidcomplexity/dataset1/results';
+
+subjects = {'AB', 'DC', 'MC', 'RB'};
+raw = struct;
+
+samp = 1000;
+
+% addpath('/home/leobar/matlab/eeg')
+
+addpath('/home/leobar/matlab/fieldtrip')
+ft_defaults
+
+addpath('/home/leobar/projects/wSMI')
+
+%% load files
+
+for subject = subjects
+    load([ inputfolder filesep subject{1} inputfile 'LUCID' ], 'lucid_epoched');
+    load([ inputfolder filesep subject{1} inputfile 'REM' ], 'rem_epoched');
+    raw.(subject{1}).lucid_epoched = lucid_epoched;
+    raw.(subject{1}).rem_epoched = rem_epoched;
+end
+
+% EEG = pop_loadset('Lucid_hdEEG_exampledataset.set', inputfolder);
+
+%% Compute connectivity
+
+window = 1000;
+step = 100;
+foi = 0:1:55;
+
+
+%     pairs = { {[23], [101, 105, 100, 104]},...
+%               {[55], [62, 68, 72, 73]}};
+
+% pairs = { {[23, 24, 18, 19], [101, 105, 100, 104]},...
+%           {[55, 56, 18, 51], [62, 68, 72, 73]}};
+% pairs_label = {'Left', 'Right'};
+
+pairs = { {[23, 24, 18, 19, 55, 56, 18, 51], [101, 105, 100, 104, 62, 68, 72, 73]} };
+pairs_label = {'Left_and_Right'};
+
+% % cross
+% pairs = { {[23, 24, 18, 19], [62, 68, 72, 73]},...
+%           {[55, 56, 18, 51], [101, 105, 100, 104]}};
+          
+fprintf('Computing ... \n');
+ytic = tic;
+results = struct;
+for subject = subjects
+    
+    lucid = raw.(subject{1}).lucid_epoched;
+    nlucid = size(lucid, 2);
+    rem = raw.(subject{1}).rem_epoched;
+    nrem = size(rem, 2);
+    
+    nmax = min(nlucid, nrem);
+    
+    lucid = lucid(:, 1:nmax);
+    rem = rem(:, 1:nmax);
+    
+    fprintf('\n\nComputing for subject %s... \n\n',subject{1});
+    xtic = tic;
+    
+    results.(subject{1}) = struct;
+    fprintf('\n\nLucid \n\n');
+    results.(subject{1}).lucid = compute_connectivity_window(lucid, pairs, samp, window, step, foi);
+    fprintf('\n\nREM \n\n');
+    results.(subject{1}).rem = compute_connectivity_window(rem, pairs, samp, window, step, foi);
+    fprintf('done subject. Took %2.2f minutes\n', toc(xtic)/60);
+
+end
+fprintf('Total time %2.2f minutes\n', toc(ytic)/60);
+
+save(sprintf('%s/wpli_window_%d_step_%d_electrodes_%s.mat', outputfolder, window, step, sprintf('%s_', pairs_label{:})), 'results')
+
+%% Plot results
+
+load(sprintf('%/wpli_window_%d_step_%d_electrodes_%s.mat', outputfolder, window, step, sprintf('%s_', pairs_label{:})), 'results')
+
+% figure
+computations = {'wpli', 'coh', 'plv', 'amplcorr'};
+ncomp = 4;
+nlin = 5; ncol = length(subjects);
+
+for r = 1:length(pairs)
+
+%     figure('name', sprintf('Subject %s, elec %s', subject, pairs_label{r}))
+    figure('name', sprintf('%s', pairs_label{r}))
+
+    % use first subject to initialize total, should be equal for all
+    result = results.(subjects{1});
+    totalrem = zeros(size(result.rem(r, :, :, :)));
+    totallucid = zeros(size(result.lucid(r, :, :, :)));
+
+    for is = 1:length(subjects)
+        subject = subjects{is};
+        result = results.(subject);
+        
+        totalrem(r, :, :, :) = totalrem(r, :, :, :) + result.rem(r, :, :, :)./length(subjects); 
+        totallucid(r, :, :, :) = totallucid(r, :, :, :) + result.lucid(r, :, :, :)./length(subjects); 
+
+        for comp = 1:ncomp
+            subplot(nlin, ncol, comp + (is-1)*ncomp)
+
+            shadedErrorBar(foi,result.rem(r, :, 1, comp),result.rem(r, :, 2, comp), 'lineProps', '-b')
+            hold on
+            shadedErrorBar(foi,result.lucid(r, :, 1, comp),result.lucid(r, :, 2, comp), 'lineProps', '-r')
+            
+%               errorbar(1, mean(result.rem(r, :, 1, comp)), mean(result.rem(r, :, 2, comp)), 'b')
+%               hold on
+%               errorbar(2, mean(result.lucid(r, :, 1, comp)), mean(result.lucid(r, :, 2, comp)), 'r')
+%               xlim([.5 2.5])
+
+            if comp == 1
+                ylabel(subject)
+            end
+            if is == 1
+                title(computations{comp})
+            end
+        end
+    end
+    
+    is = is + 1;
+    for comp = 1:ncomp
+        subplot(nlin, ncol, comp + (is-1)*ncomp)
+
+        shadedErrorBar(foi,totalrem(r, :, 1, comp),totalrem(r, :, 2, comp), 'lineProps', '-b')
+        hold on
+        shadedErrorBar(foi,totallucid(r, :, 1, comp),totallucid(r, :, 2, comp), 'lineProps', '-r')
+
+        if comp == 1
+            ylabel('Total')
+        end
+        if is == 1
+            title(computations{comp})
+        end
+    end    
+end
+
+% legend({'Lucid Left', 'Lucid Right', 'REM left', 'REM right'})
+
+%%
+
+
+
+
+
+
